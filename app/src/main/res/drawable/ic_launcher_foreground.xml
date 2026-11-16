@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original goblin-mask mark (108dp adaptive canvas, art inside the 72dp safe zone). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- horns -->
+    <path android:fillColor="#C6FF00" android:pathData="M38,40 L30,20 L46,34 Z" />
+    <path android:fillColor="#C6FF00" android:pathData="M70,40 L78,20 L62,34 Z" />
+    <!-- face -->
+    <path android:fillColor="#00000000" android:strokeColor="#C6FF00" android:strokeWidth="3"
+        android:pathData="M54,30 C70,30 80,40 80,54 C80,70 70,84 54,84 C38,84 28,70 28,54 C28,40 38,30 54,30 Z" />
+    <!-- eyes -->
+    <path android:fillColor="#FF2D7A" android:pathData="M37,50 L49,54 L37,57 Z" />
+    <path android:fillColor="#FF2D7A" android:pathData="M71,50 L59,54 L71,57 Z" />
+    <!-- grin with fangs -->
+    <path android:fillColor="#C6FF00"
+        android:pathData="M36,64 Q54,80 72,64 L66,66 L63,72 L60,67 L54,69 L48,67 L45,72 L42,66 Z" />
+</vector>
