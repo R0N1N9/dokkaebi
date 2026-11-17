@@ -32,7 +32,13 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // Each screenshot walkthrough gets a fresh JVM so app state can't leak between them.
+            all { it.forkEvery = 1 }
+        }
+    }
 }
 
 dependencies {

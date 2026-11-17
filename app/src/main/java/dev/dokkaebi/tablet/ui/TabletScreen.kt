@@ -42,6 +42,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.widthIn
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.platform.LocalContext
+import dev.dokkaebi.tablet.ContactMode
+import dev.dokkaebi.tablet.PickPhoneContact
+import dev.dokkaebi.tablet.RealCaller
+import dev.dokkaebi.tablet.readPickedContact
+import dev.dokkaebi.tablet.rememberRealCaller
+import dev.dokkaebi.tablet.recon.ReconViewModel
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Delete
@@ -88,11 +99,12 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.sin
 
-private enum class Tab(val label: String) { TARGETS("TARGETS"), FEEDS("FEEDS"), LOG("LOG"), CONFIG("CONFIG") }
+private enum class Tab(val label: String) { TARGETS("TARGETS"), FEEDS("FEEDS"), LOG("LOG"), RECON("RECON"), CONFIG("CONFIG") }
 
 @Composable
-fun TabletScreen(vm: TabletViewModel) {
+fun TabletScreen(vm: TabletViewModel, rvm: ReconViewModel) {
     var tab by rememberSaveable { mutableStateOf(Tab.TARGETS) }
+    val realCaller = rememberRealCaller(vm)
     val anyRinging = vm.targets.any { it.status == Status.RINGING }
 
     Box(Modifier.fillMaxSize().background(Hud.Bg)) {
@@ -103,15 +115,16 @@ fun TabletScreen(vm: TabletViewModel) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AnimatedContent(tab, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(100)) }, label = "tab") { t ->
                     when (t) {
-                        Tab.TARGETS -> TargetsPanel(vm)
+                        Tab.TARGETS -> TargetsPanel(vm, realCaller)
                         Tab.FEEDS -> FeedsPanel(vm)
                         Tab.LOG -> LogPanel(vm)
+                        Tab.RECON -> ReconPanel(rvm)
                         Tab.CONFIG -> ConfigPanel(vm)
                     }
                 }
             }
             Spacer(Modifier.height(8.dp))
-            ActionBar(vm)
+            if (tab != Tab.RECON) ActionBar(vm)
         }
         if (anyRinging) AlertEdge()
         RollingBand()
@@ -135,7 +148,11 @@ private fun TopBar(vm: TabletViewModel, tab: Tab, alert: Boolean, onTab: (Tab) -
                 Column(Modifier.weight(1f)) {
                     GlitchText("DOKKAEBI", Hud.mono(18, FontWeight.Black, Hud.Accent, 6f))
                     Text(
-                        if (alert) "● LINES ACTIVE" else "LOGIC BOMB // ARMED",
+                        when {
+                            alert -> "● LINES ACTIVE"
+                            vm.mode == ContactMode.REAL -> "LIVE MODE // REAL CALLS"
+                            else -> "LOGIC BOMB // ARMED"
+                        },
                         style = Hud.mono(9, color = if (alert && blink) Hud.Hot else Hud.TextDim, spacing = 2f),
                     )
                 }
@@ -154,7 +171,7 @@ private fun TopBar(vm: TabletViewModel, tab: Tab, alert: Boolean, onTab: (Tab) -
 
 @Composable
 private fun TabRow(tab: Tab, onTab: (Tab) -> Unit, modifier: Modifier) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         Tab.entries.forEach { t ->
             val sel = t == tab
             val bg by animateColorAsState(if (sel) Hud.Accent else Color.Transparent, label = "tabbg")
@@ -163,7 +180,7 @@ private fun TabRow(tab: Tab, onTab: (Tab) -> Unit, modifier: Modifier) {
                     .border(1.dp, if (sel) Hud.Accent else Hud.Line)
                     .background(bg)
                     .clickable { onTab(t) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(t.label, style = Hud.mono(11, FontWeight.Bold, if (sel) Hud.Bg else Hud.Text, 2f))
@@ -199,9 +216,12 @@ private fun AlertEdge() {
 /* ------------------------------ TARGETS ------------------------------ */
 
 @Composable
-private fun TargetsPanel(vm: TabletViewModel) {
+private fun TargetsPanel(vm: TabletViewModel, realCaller: RealCaller) {
     if (vm.targets.isEmpty()) {
-        EmptyNote("NO DEVICES TAGGED\nAdd targets in CONFIG")
+        EmptyNote(
+            if (vm.mode == ContactMode.REAL) "NO CONTACTS TAGGED\nImport phone contacts in CONFIG"
+            else "NO DEVICES TAGGED\nAdd targets in CONFIG"
+        )
         return
     }
     LazyVerticalGrid(
@@ -211,7 +231,9 @@ private fun TargetsPanel(vm: TabletViewModel) {
         contentPadding = PaddingValues(bottom = 4.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        items(vm.targets, key = { it.id }) { t -> TargetCard(t, vm) }
+        items(vm.targets, key = { it.id }) { t ->
+            if (vm.mode == ContactMode.REAL) RealTargetCard(t, realCaller) else TargetCard(t, vm)
+        }
     }
 }
 
@@ -285,6 +307,44 @@ private fun TargetCard(t: Target, vm: TabletViewModel) {
 }
 
 @Composable
+private fun RealTargetCard(t: Target, realCaller: RealCaller) {
+    val recent = t.lastCalled > 0 && System.currentTimeMillis() - t.lastCalled < 60_000
+    val color = if (recent) Hud.Hot else Hud.Line
+    val inf = rememberInfiniteTransition(label = "real")
+    val wave by inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing)), label = "wave")
+    Column(
+        Modifier
+            .background(Hud.Panel.copy(alpha = 0.92f))
+            .border(1.dp, color)
+            .brackets(if (recent) Hud.Hot else Hud.Warn.copy(alpha = 0.6f), 10f)
+            .padding(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(54.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    if (recent) for (k in 0..2) {
+                        val ph = (wave + k / 3f) % 1f
+                        drawCircle(Hud.Hot.copy(alpha = (1 - ph) * 0.8f), radius = size.minDimension / 2 * (0.35f + 0.65f * ph), style = Stroke(2.dp.toPx()))
+                    } else drawCircle(Hud.Warn.copy(alpha = 0.6f), radius = size.minDimension / 2 * 0.62f, style = Stroke(1.5.dp.toPx()))
+                }
+                Icon(Icons.Filled.Call, null, tint = if (recent) Hud.Hot else Hud.Warn, modifier = Modifier.size(24.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.name, style = Hud.mono(15, FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(t.number ?: "", style = Hud.mono(10, color = Hud.TextDim, spacing = 0f), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        val status = if (t.lastCalled == 0L) "LIVE · READY"
+        else "LAST CALL " + SimpleDateFormat("MMM d HH:mm", Locale.US).format(Date(t.lastCalled)).uppercase()
+        Text(status, style = Hud.mono(11, FontWeight.Bold, if (recent) Hud.Hot else Hud.Warn, 2f), maxLines = 1)
+        Spacer(Modifier.height(10.dp))
+        HudButton("CALL", Hud.Hot, Modifier.fillMaxWidth()) { realCaller.call(t) }
+    }
+}
+
+@Composable
 fun HudButton(label: String, color: Color, modifier: Modifier = Modifier, filled: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier
@@ -300,7 +360,7 @@ fun HudButton(label: String, color: Color, modifier: Modifier = Modifier, filled
 }
 
 @Composable
-private fun HudIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, onClick: () -> Unit) {
+internal fun HudIconButton(icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, onClick: () -> Unit) {
     Box(
         Modifier.size(36.dp).border(1.dp, color).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
@@ -319,7 +379,7 @@ private fun ActionBar(vm: TabletViewModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Charges(vm.charges, vm.recharge)
                     Spacer(Modifier.width(12.dp))
-                    LogicBombButton(Modifier.weight(1f), enabled = vm.charges > 0) { vm.logicBomb() }
+                    LogicBombButton(Modifier.weight(1f), enabled = vm.charges > 0, realMode = vm.mode == ContactMode.REAL) { vm.logicBomb() }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HudButton("END ALL", Hud.Hot, Modifier.weight(1f)) { vm.hangUpAll() }
@@ -330,7 +390,7 @@ private fun ActionBar(vm: TabletViewModel) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Charges(vm.charges, vm.recharge)
                 Spacer(Modifier.width(12.dp))
-                LogicBombButton(Modifier.weight(1f), enabled = vm.charges > 0) { vm.logicBomb() }
+                LogicBombButton(Modifier.weight(1f), enabled = vm.charges > 0, realMode = vm.mode == ContactMode.REAL) { vm.logicBomb() }
                 Spacer(Modifier.width(8.dp))
                 HudButton("END ALL", Hud.Hot) { vm.hangUpAll() }
                 Spacer(Modifier.width(6.dp))
@@ -361,7 +421,13 @@ private fun Charges(charges: Int, recharge: Float) {
 
 /** Press-and-hold to deploy: a fill sweeps across while held; releasing early cancels. */
 @Composable
-private fun LogicBombButton(modifier: Modifier, enabled: Boolean, onFire: () -> Unit) {
+private fun LogicBombButton(modifier: Modifier, enabled: Boolean, realMode: Boolean = false, onFire: () -> Unit) {
+    if (realMode) {
+        Box(modifier.height(48.dp).border(2.dp, Hud.Line).background(Hud.Line.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
+            Text("LOGIC BOMB · FAKE MODE ONLY", style = Hud.mono(12, FontWeight.Bold, Hud.TextDim, 2f), maxLines = 1)
+        }
+        return
+    }
     val scope = rememberCoroutineScope()
     val fill = remember { Animatable(0f) }
     var flash by remember { mutableIntStateOf(0) }
@@ -419,7 +485,10 @@ private fun LogicBombButton(modifier: Modifier, enabled: Boolean, onFire: () -> 
 private fun FeedsPanel(vm: TabletViewModel) {
     val feeds = vm.targets.filter { it.status == Status.BREACHED }
     if (feeds.isEmpty()) {
-        EmptyNote("NO COMPROMISED DEVICES\nRing a target — when they hang up, their camera is yours")
+        EmptyNote(
+            if (vm.mode == ContactMode.REAL) "FEEDS ARE SIMULATED\nSwitch to FAKE mode in CONFIG to use them"
+            else "NO COMPROMISED DEVICES\nRing a target — when they hang up, their camera is yours"
+        )
         return
     }
     LazyVerticalGrid(
@@ -532,18 +601,45 @@ private fun ConfigPanel(vm: TabletViewModel) {
                 )
             }
         }
-        item { SectionTitle("TARGETS (${vm.targets.size})") }
+        item { SectionTitle("CONTACT MODE") }
         item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ContactMode.entries.forEach { m ->
+                    val sel = vm.mode == m
+                    val c = if (m == ContactMode.REAL) Hud.Hot else Hud.Accent
+                    HudButton(if (m == ContactMode.REAL) "REAL CONTACTS" else "FAKE TARGETS", c, Modifier.weight(1f), filled = sel) { vm.switchMode(m) }
+                }
+            }
+        }
+        item {
+            Text(
+                if (vm.mode == ContactMode.REAL)
+                    "REAL: CALL places an actual phone call to the contact (asks for call permission; if denied, opens your dialer instead). Logic bomb and feeds are disabled."
+                else "FAKE: everything is simulated. No calls leave the device.",
+                style = Hud.mono(10, color = if (vm.mode == ContactMode.REAL) Hud.Warn else Hud.TextDim, spacing = 0f),
+            )
+        }
+        if (vm.mode == ContactMode.REAL) {
+            item { ToggleRow("CONFIRM BEFORE CALLING", vm.confirmRealCalls, vm::updateConfirmRealCalls) }
+        }
+        item { SectionTitle("TARGETS (${vm.targets.size})") }
+        if (vm.mode == ContactMode.REAL) {
+            item { RealContactAdder(vm) }
+        } else item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 HudField(newName, { newName = it }, "TAG NEW DEVICE…", Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
                 HudButton("ADD", Hud.Accent) { vm.addTarget(newName); newName = "" }
             }
         }
-        items(vm.targets, key = { it.id }) { t ->
-            var name by remember(t.id) { mutableStateOf(t.name) }
+        items(vm.targets, key = { "${vm.mode}-${it.id}" }) { t ->
+            var name by remember(t.id, vm.mode) { mutableStateOf(t.name) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 HudField(name, { name = it; vm.rename(t.id, it) }, "NAME", Modifier.weight(1f))
+                t.number?.let {
+                    Spacer(Modifier.width(8.dp))
+                    Text(it, style = Hud.mono(11, color = Hud.TextDim, spacing = 0f), maxLines = 1, modifier = Modifier.widthIn(max = 150.dp))
+                }
                 Spacer(Modifier.width(8.dp))
                 HudIconButton(Icons.Filled.Delete, Hud.Hot) { vm.remove(t.id) }
             }
@@ -551,7 +647,8 @@ private fun ConfigPanel(vm: TabletViewModel) {
         item {
             Text(
                 "Fan-made prop app. All visuals are generated in code; not affiliated with any game publisher. " +
-                    "It never places real calls or touches other devices.",
+                    "Real calls happen only in REAL mode, one at a time, when you press CALL. " +
+                    "RECON tools are for networks you own or are authorized to test.",
                 style = Hud.mono(10, color = Hud.TextDim, spacing = 0f),
                 modifier = Modifier.padding(top = 12.dp),
             )
@@ -560,7 +657,31 @@ private fun ConfigPanel(vm: TabletViewModel) {
 }
 
 @Composable
-private fun SectionTitle(s: String) {
+private fun RealContactAdder(vm: TabletViewModel) {
+    val context = LocalContext.current
+    var name by remember { mutableStateOf("") }
+    var number by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(PickPhoneContact()) { uri ->
+        val picked = uri?.let { readPickedContact(context, it) }
+        if (picked != null) vm.addContact(picked.first, picked.second)
+        else if (uri != null) vm.log("COULD NOT READ PICKED CONTACT", 2)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        HudButton("IMPORT FROM CONTACTS", Hud.Hot, Modifier.fillMaxWidth()) {
+            try { picker.launch(Unit) } catch (e: android.content.ActivityNotFoundException) { vm.log("NO CONTACTS APP", 2) }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HudField(name, { name = it }, "NAME", Modifier.weight(1f))
+            Spacer(Modifier.width(6.dp))
+            HudField(number, { number = it.filter { c -> c.isDigit() || c in "+*# -()" } }, "NUMBER", Modifier.weight(1f), maxLen = 24)
+            Spacer(Modifier.width(6.dp))
+            HudButton("ADD", Hud.Hot) { if (vm.addContact(name, number)) { name = ""; number = "" } }
+        }
+    }
+}
+
+@Composable
+internal fun SectionTitle(s: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(6.dp, 14.dp).background(Hud.Accent))
         Spacer(Modifier.width(8.dp))
@@ -569,7 +690,7 @@ private fun SectionTitle(s: String) {
 }
 
 @Composable
-private fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
+internal fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, style = Hud.mono(12, FontWeight.Bold), modifier = Modifier.weight(1f))
         Switch(
@@ -580,11 +701,11 @@ private fun ToggleRow(label: String, value: Boolean, onChange: (Boolean) -> Unit
 }
 
 @Composable
-private fun HudField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier) {
+internal fun HudField(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier, maxLen: Int = 18) {
     Box(modifier.height(36.dp).border(1.dp, Hud.Line).background(Hud.Bg).padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
         if (value.isEmpty()) Text(hint, style = Hud.mono(12, color = Hud.TextDim))
         BasicTextField(
-            value, { onChange(it.take(18)) },
+            value, { onChange(it.take(maxLen)) },
             singleLine = true,
             textStyle = Hud.mono(12, FontWeight.Bold, Hud.Text),
             cursorBrush = SolidColor(Hud.Accent),
@@ -594,7 +715,7 @@ private fun HudField(value: String, onChange: (String) -> Unit, hint: String, mo
 }
 
 @Composable
-private fun EmptyNote(text: String) {
+internal fun EmptyNote(text: String) {
     Box(Modifier.fillMaxSize().border(1.dp, Hud.Line).brackets(Hud.AccentDim), contentAlignment = Alignment.Center) {
         Text(text, style = Hud.mono(12, color = Hud.TextDim), textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(24.dp))
     }

@@ -20,12 +20,19 @@ import kotlin.random.Random
 
 enum class Status { IDLE, DIALING, RINGING, BREACHED }
 
+/** FAKE: simulated ringing of made-up targets. REAL: targets are phone contacts and CALL places a real call. */
+enum class ContactMode { FAKE, REAL }
+
 data class Target(
     val id: Int,
     val name: String,
     val device: String,
     val status: Status = Status.IDLE,
     val since: Long = System.currentTimeMillis(),
+    /** Phone number — only set for REAL-mode targets. */
+    val number: String? = null,
+    /** Epoch ms of the last real call placed to this target, 0 if never. */
+    val lastCalled: Long = 0,
 )
 
 data class LogLine(val time: String, val text: String, val level: Int = 0)
@@ -44,12 +51,15 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
     var sound by mutableStateOf(prefs.getBoolean("sound", true)); private set
     var haptics by mutableStateOf(prefs.getBoolean("haptics", true)); private set
     var autoHangUpSec by mutableIntStateOf(prefs.getInt("autoHangUp", 12)); private set
+    var confirmRealCalls by mutableStateOf(prefs.getBoolean("confirmReal", true)); private set
+    var mode by mutableStateOf(
+        runCatching { ContactMode.valueOf(prefs.getString("mode", null) ?: "FAKE") }.getOrDefault(ContactMode.FAKE)
+    ); private set
 
     init {
-        val saved = prefs.getString("targets", null)?.split('\n')?.filter { it.isNotBlank() }
-        (saved ?: DEFAULT_NAMES).forEach { addTarget(it, persist = false, announce = false) }
+        loadTargets()
         log("LOGIC BOMB SUITE ONLINE", 1)
-        log("${targets.size} DEVICES ON LOCAL MESH")
+        log("MODE: ${mode.name} — ${targets.size} DEVICES ON LOCAL MESH")
         viewModelScope.launch { rechargeLoop() }
     }
 
@@ -84,6 +94,7 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Place a call to one target: dial -> ring -> (hang up) -> breached. */
     fun call(id: Int, fromBomb: Boolean = false) {
+        if (mode != ContactMode.FAKE) return  // real calls go through the system dialer (see RealCaller)
         val t = targets.firstOrNull { it.id == id } ?: return
         if (t.status == Status.DIALING || t.status == Status.RINGING) return
         if (!fromBomb) feedback.blip(sound, haptics)
@@ -121,6 +132,10 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Ring every idle device at once, staggered for effect. Consumes one charge. */
     fun logicBomb(): Boolean {
+        if (mode != ContactMode.FAKE) {
+            log("LOGIC BOMB IS FAKE-MODE ONLY — REAL CALLS ARE ONE AT A TIME", 2)
+            return false
+        }
         if (charges <= 0) {
             log("NO CHARGES — RECHARGING", 2)
             feedback.blip(sound, haptics)
@@ -158,6 +173,52 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
         if (persist) save()
     }
 
+    /** Adds a real contact (REAL mode). Returns false if the number is unusable or already present. */
+    fun addContact(name: String, number: String): Boolean {
+        val num = sanitizeNumber(number) ?: run { log("INVALID NUMBER: $number", 2); return false }
+        if (targets.any { it.number == num }) { log("ALREADY TAGGED: $num", 2); return false }
+        val clean = name.trim().uppercase().take(18).ifEmpty { num }
+        targets.add(Target(nextId++, clean, num, number = num))
+        log("CONTACT TAGGED: $clean")
+        save()
+        return true
+    }
+
+    /** Record that a real call was handed to the system dialer. */
+    fun markRealCall(id: Int) {
+        val t = targets.firstOrNull { it.id == id } ?: return
+        update(id) { it.copy(lastCalled = System.currentTimeMillis()) }
+        log("REAL CALL → ${t.name} (${t.number})", 2)
+    }
+
+    fun switchMode(m: ContactMode) {
+        if (m == mode) return
+        save()
+        jobs.values.forEach { it.cancel() }
+        jobs.clear()
+        mode = m
+        prefs.edit().putString("mode", m.name).apply()
+        loadTargets()
+        syncRing()
+        log("MODE → ${m.name} (${targets.size} TARGETS)", 1)
+    }
+
+    private fun loadTargets() {
+        targets.clear()
+        when (mode) {
+            ContactMode.FAKE -> {
+                val saved = prefs.getString("targets", null)?.split('\n')?.filter { it.isNotBlank() }
+                (saved ?: DEFAULT_NAMES).forEach { addTarget(it, persist = false, announce = false) }
+            }
+            ContactMode.REAL -> {
+                prefs.getString("realTargets", "")!!.split('\n').filter { it.contains('\t') }.forEach { line ->
+                    val (name, num, last) = (line.split('\t') + listOf("0")).take(3)
+                    targets.add(Target(nextId++, name, num, number = num, lastCalled = last.toLongOrNull() ?: 0))
+                }
+            }
+        }
+    }
+
     fun rename(id: Int, name: String) {
         val clean = name.trim().uppercase().take(18).ifEmpty { return }
         update(id) { it.copy(name = clean) }
@@ -173,12 +234,21 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateSound(on: Boolean) { sound = on; prefs.edit().putBoolean("sound", on).apply(); feedback.setRinging(false, false, false); syncRing() }
     fun updateHaptics(on: Boolean) { haptics = on; prefs.edit().putBoolean("haptics", on).apply(); feedback.setRinging(false, false, false); syncRing() }
+    fun updateConfirmRealCalls(on: Boolean) { confirmRealCalls = on; prefs.edit().putBoolean("confirmReal", on).apply() }
     fun updateAutoHangUp(sec: Int) { autoHangUpSec = sec; prefs.edit().putInt("autoHangUp", sec).apply() }
 
     fun pauseFeedback() = feedback.setRinging(false, false, false)
     fun resumeFeedback() = syncRing()
 
-    private fun save() = prefs.edit().putString("targets", targets.joinToString("\n") { it.name }).apply()
+    private fun save() {
+        when (mode) {
+            ContactMode.FAKE -> prefs.edit().putString("targets", targets.joinToString("\n") { it.name }).apply()
+            ContactMode.REAL -> prefs.edit().putString(
+                "realTargets",
+                targets.joinToString("\n") { "${it.name.replace('\t', ' ')}\t${it.number}\t${it.lastCalled}" },
+            ).apply()
+        }
+    }
 
     override fun onCleared() {
         jobs.values.forEach { it.cancel() }
@@ -190,6 +260,13 @@ class TabletViewModel(app: Application) : AndroidViewModel(app) {
         const val RECHARGE_MS = 20_000f
         private val TIME = SimpleDateFormat("HH:mm:ss", Locale.US)
         private val DEFAULT_NAMES = listOf("ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO")
+        /** Keeps digits, a leading +, and dial-pad symbols; null if fewer than 3 digits remain. */
+        fun sanitizeNumber(raw: String): String? {
+            val trimmed = raw.trim()
+            val kept = trimmed.filterIndexed { i, c -> c.isDigit() || c == '*' || c == '#' || (c == '+' && i == 0) }
+            return kept.takeIf { k -> k.count { it.isDigit() } >= 3 }
+        }
+
         private fun randomDevice(): String {
             val hex = "0123456789ABCDEF"
             return "MAC " + (1..6).joinToString(":") { "${hex.random()}${hex.random()}" }
