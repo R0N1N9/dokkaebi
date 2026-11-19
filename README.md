@@ -1,4 +1,10 @@
-# Dokkaebi — hacker tablet prop app
+<p align="center"><img src="docs/logo.svg" width="120" alt="Dokkaebi logo"></p>
+
+<h1 align="center">Dokkaebi</h1>
+
+<p align="center"><b>Hacker tablet prop app for Android</b>: ring targets, trip the logic bomb, watch the feeds, and run real network recon.</p>
+
+<p align="center"><img src="app/screenshots/01_boot.png" width="720" alt="Dokkaebi boot screen with the goblin-mask mark"></p>
 
 An Android app styled after a hacker's "logic bomb" tablet: you ring a set of target
 phones, watch them ring, and when a target "hangs up" you get a fake camera feed from
@@ -6,12 +12,6 @@ their device. All art (the goblin-mask mark, HUD, camera feeds) is original and 
 
 It has two contact modes, **FAKE** (everything simulated) and **REAL** (calls your actual
 phone contacts), plus a **RECON** tab with real network reconnaissance tools.
-
-| Tablet / landscape | Phone / portrait |
-|---|---|
-| ![targets](app/screenshots/03_ringing.png) | ![phone](app/screenshots/phone_03_ringing.png) |
-| ![feeds](app/screenshots/04_feeds.png) | ![boot](app/screenshots/phone_01_boot.png) |
-| ![recon ports](app/screenshots/08_recon_ports.png) | ![real contacts](app/screenshots/phone_10_real_targets.png) |
 
 ## Features
 - **Boot sequence**: glitching title, scrambled subtitle, exploit log, segmented progress bar (tap to skip).
@@ -43,6 +43,23 @@ phone contacts), plus a **RECON** tab with real network reconnaissance tools.
 - **Config**: turn the ring tone and vibration on or off, set auto hang-up (0–30 s, or manual only), and add, rename or remove targets (saved between launches).
 - CRT scanlines, vignette, rolling band, RGB-split glitch text, red alert border while anything rings.
 - The ring tone is synthesized at runtime, so there are no audio files. Fullscreen, keeps the screen on, and adapts to phone and tablet sizes in either orientation.
+
+## Screenshots
+
+| Tablet / landscape | Phone / portrait |
+|---|---|
+| ![targets](app/screenshots/03_ringing.png) | ![phone](app/screenshots/phone_03_ringing.png) |
+| ![feeds](app/screenshots/04_feeds.png) | ![boot](app/screenshots/phone_01_boot.png) |
+| ![recon ports](app/screenshots/08_recon_ports.png) | ![real contacts](app/screenshots/phone_10_real_targets.png) |
+
+More screens:
+
+| Recon gate | Config (fake mode) | Config (real mode) | Event log |
+|---|---|---|---|
+| ![recon gate](app/screenshots/phone_07_recon_gate.png) | ![config](app/screenshots/phone_06_config.png) | ![real config](app/screenshots/phone_09_real_config.png) | ![log](app/screenshots/phone_05_log.png) |
+| *"Authorized use only" acknowledgement before RECON unlocks* | *Feedback, auto hang-up, contact mode, target list* | *Contact picker, manual entry, confirm-before-calling* | *Self-scrolling terminal log* |
+
+All screenshots are rendered by the Robolectric/Roborazzi tests (see [Screenshot tests](#screenshot-tests)).
 
 ## Build & install
 Requires JDK 17+ and the Android SDK (API 35).
